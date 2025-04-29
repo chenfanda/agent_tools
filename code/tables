@@ -1,0 +1,93 @@
+--客户规模统计指标表
+CREATE TABLE IF NOT EXISTS "P03_STAT_INDEX_DATA_CUST_D" (
+"Etl_dt" datetime,
+"lvl1_sub_cent_name" text,
+"lvl2_sub_cent_name" text,
+"CurrD_New_Cust_Cnt" real,
+"CurrM_New_Cust_Cnt" real,
+"CurrY_New_Cust_Cnt" real,
+"CurrY_Vald_Cust_Cnt" real,
+"CurrY_New_Cust_Vgrs30_Cnt" real,
+"Cust_Vgrs30_Cnt_NoNew" real,
+"Cust_Vgrs30_Cnt" real,
+PRIMARY KEY ("Etl_dt","lvl1_sub_cent_name","lvl2_sub_cent_name")
+);
+
+--发卡规模统计指标表
+CREATE TABLE IF NOT EXISTS "P03_STAT_INDEX_DATA_CARD_D" (
+"Etl_dt" datetime,
+"lvl1_sub_cent_name" text,
+"lvl2_sub_cent_name" text,
+"CurrD_New_Card_Cnt" real,
+"CurrM_New_Card_Cnt" real,
+"CurrY_New_Card_Cnt" real,
+PRIMARY KEY ("Etl_dt","lvl1_sub_cent_name","lvl2_sub_cent_name")
+);
+
+--交易规模统计指标表
+CREATE TABLE IF NOT EXISTS "P03_STAT_INDEX_DATA_TX_D" (
+"Etl_dt" datetime,
+"lvl1_sub_cent_name" text,
+"lvl2_sub_cent_name" text,
+"CurrD_Consm_Amt" real,
+"CurrM_Consm_Amt" real,
+"CurrY_Consm_Amt" real,
+"CurrD_Tcash_Amt" real,
+"CurrM_Tcash_Amt" real,
+"CurrY_Tcash_Amt" real,
+"CurrD_Stlm_Amt" real,
+"CurrM_Stlm_Amt" real,
+"CurrY_Stlm_Amt" real,
+"CurrD_Sjj_Amt" real,
+"CurrM_Sjj_Amt" real,
+"CurrY_Sjj_Amt" real,
+PRIMARY KEY ("Etl_dt","lvl1_sub_cent_name","lvl2_sub_cent_name")
+);
+
+--分期产品交易统计指标
+CREATE TABLE IF NOT EXISTS "P03_STAT_INDEX_DATA_TX_STLM_D" (
+"Etl_dt" datetime,
+"lvl1_sub_cent_name" text,
+"lvl2_sub_cent_name" text,
+"Prod" text,
+"CurrD_Stlm_Amt" real,
+"CurrM_Stlm_Amt" real,
+"CurrY_Stlm_Amt" real,
+PRIMARY KEY ("Etl_dt","lvl1_sub_cent_name","lvl2_sub_cent_name","Prod")
+);
+
+--资产质量统计指标表
+CREATE TABLE IF NOT EXISTS "P03_STAT_INDEX_DATA_AS_D" (
+"Etl_dt" datetime,
+"lvl1_sub_cent_name" text,
+"lvl2_sub_cent_name" text,
+"Curr_Loan_Bal" real,
+"Curr_Ovrd_Bal" real,
+"Curr_Np_Amt" real,
+"Curr_Np_Amt_In" real,
+"Curr_Np_Amt_In_Out" real,
+"CurrY_Np_ABS_Tran_Amt" real,
+"CurrY_Norm_Wrto_Amt" real,
+"CurrD_Np_Rpy_Amt" real,
+"CurrM_Np_Rpy_Amt" real,
+"CurrY_Np_Rpy_Amt" real,
+"CurrD_Wrto_Rpy_Amt" real,
+"CurrM_Wrto_Rpy_Amt" real,
+"CurrY_Wrto_Rpy_Amt" real,
+PRIMARY KEY ("Etl_dt","lvl1_sub_cent_name","lvl2_sub_cent_name")
+);
+
+--同业银行统计指标表
+CREATE TABLE IF NOT EXISTS "P03_STAT_INDEX_DATA_IBANK_D" (
+"Etl_dt" datetime,
+"Ibank_Bank_Name" text,
+"Kpi_Name" text,
+"Kpi_Val" real,
+"Kpi_LstQEVal" real,
+"Kpi_LstQE_Incr" real,
+"Kpi_LstQE_Rate" real,
+"Kpi_LstYEVal" real,
+"Kpi_LstYE_Incr" real,
+"Kpi_LstYE_Rate" real,
+PRIMARY KEY ("Etl_dt","Ibank_Bank_Name","Kpi_Name")
+);

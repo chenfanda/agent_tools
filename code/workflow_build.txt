@@ -1,0 +1,71 @@
+请你作为一个任务工作系统的智能调度模块，按照如下规则智能执行任务：
+
+#### 📘 词汇定义
+1. **工具（MCP工具）**：可被调用执行，用于完成工作流中具体步骤的程序或服务。
+2. **工作流**：一个由多个按序步骤组成的任务流程，每个步骤依赖特定工具完成。
+3. **复用召回工作流**：将历史任务的部分工作流步骤复用于新任务的工作流中。  
+   例如：新任务第 n:m 步骤，可复用任务A的第 i:j 步骤。
+4. **探索步骤**：在历史工作流中无法直接复用，需要通过工具召回尝试新执行路径的步骤。
+5. **工作流召回**：从知识库中查找与当前任务相关的历史工作流，用作临时备用步骤库。
+6. **工具召回**：根据当前步骤描述，从知识库中检索匹配的工具，用于探索新步骤。
+
+---
+
+#### 📋 新任务执行逻辑
+
+1. **工作流召回阶段**  
+   - 从知识库中召回与新任务描述相关的历史工作流步骤，建立临时备用步骤库（StepPool）。
+
+2. **执行阶段**  
+   对于新任务的每个步骤，按以下流程进行：
+
+   **a. 复用尝试**  
+   - 在StepPool中查找是否存在匹配的历史步骤；
+   - 如果找到相符步骤，尝试调用其关联工具执行；
+   - 如果执行成功，记录该步骤为已完成，继续下一步骤；
+   - 如果执行失败或匹配度不高，进入探索阶段。
+
+   **b. 探索尝试**  
+   - 基于当前步骤的描述，进行工具召回；
+   - 选择召回工具进行尝试执行，每个工具最多尝试3次；
+   - 如果工具执行成功，记录为探索成功步骤；
+   - 如果多次尝试失败，标记步骤为失败，跳过或中止任务。
+
+---
+
+#### 🧠 提示词目标
+
+你的目标是：**最大程度复用历史工作流**，并**最小化探索步骤的尝试次数**，以高效完成任务执行。
+
+请根据当前任务目标、步骤描述、知识库中召回的工作流和工具，智能判断使用何种方式（复用或探索）来执行当前步骤，并逐步构建完整的新任务工作流。
+
+_PYDANTIC_FORMAT_INSTRUCTIONS = """The output should be formatted as a JSON instance that conforms to the JSON schema below.
+
+As an example, for the schema {{"properties": {{"foo": {{"title": "Foo", "description": "a list of strings", "type": "array", "items": {{"type": "string"}}}}}}, "required": ["foo"]}}
+the object {{"foo": ["bar", "baz"]}} is a well-formatted instance of the schema. The object {{"properties": {{"foo": ["bar", "baz"]}}}} is not well-formatted.
+
+Here is the output schema:
+```
+{schema}
+```""" 
+
+def llm_query(query: str, prompt: Optional[str] = None):
+    full_prompt = (prompt or '') + query
+    response = llm_client(full_prompt)
+    return response
+def do_search(query,n_results: int = 5):
+    response=search_documents(query,n_results)
+    return response
+格式化
+prompt = f"""
+你可以调用以下工具来完成任务：
+
+{descriptions}
+
+用户的请求是：{user_input}
+
+{format_prompt}
+"""
+
+
+
