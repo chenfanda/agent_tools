@@ -1,0 +1,17 @@
+{
+  "voices": {
+    "3fe185c6": {
+      "voice_id": "3fe185c6",
+      "voice_name": "xujiang",
+      "text": "放过了他老婆和孩子",
+      "description": "从字幕 \"放过了他老婆和孩子...\" 提取",
+      "audio_filename": "20251212_175106_3fe185c6_xujiang.wav",
+      "text_filename": "20251212_175106_3fe185c6_xujiang.txt",
+      "created_time": "2025-12-12T17:51:06.633313",
+      "file_size": 43564,
+      "duration": 1.36
+    }
+  },
+  "created_time": "2025-12-12T17:51:06.633278",
+  "updated_time": "2025-12-12T17:51:06.633331"
+}

@@ -1,0 +1,39 @@
+{
+  "voices": {
+    "de990c9e": {
+      "voice_id": "de990c9e",
+      "voice_name": "chengong",
+      "text": "将军若用吾计,不至于此!",
+      "description": "三国杀武将陈宫的配音",
+      "audio_filename": "20250612_173835_de990c9e_chengong.wav",
+      "text_filename": "20250612_173835_de990c9e_chengong.txt",
+      "created_time": "2025-06-12T17:38:35.044716",
+      "file_size": 112894,
+      "duration": 3.5265625
+    },
+    "73f369e2": {
+      "voice_id": "73f369e2",
+      "voice_name": "燕窝广告",
+      "text": "吃燕窝就选燕之屋，本节目由26年专注高品质燕窝的燕之屋冠名播出。豆奶牛奶换着喝，营养更均衡，本节目由豆本豆豆奶特约播出。",
+      "description": null,
+      "audio_filename": "20250613_105533_73f369e2_燕窝广告.wav",
+      "text_filename": "20250613_105533_73f369e2_燕窝广告.txt",
+      "created_time": "2025-06-13T10:55:33.843168",
+      "file_size": 318550,
+      "duration": 9.9533125
+    },
+    "e379927c": {
+      "voice_id": "e379927c",
+      "voice_name": "严世蕃",
+      "text": "你有什么资格来教训我大明王朝两京一十三省都在我的肩上担着",
+      "description": "大明王朝-严世蕃",
+      "audio_filename": "20250617_163104_e379927c_严世蕃.wav",
+      "text_filename": "20250617_163104_e379927c_严世蕃.txt",
+      "created_time": "2025-06-17T16:31:04.226871",
+      "file_size": 41184,
+      "duration": 8.0
+    }
+  },
+  "created_time": "2025-06-12T17:38:35.044697",
+  "updated_time": "2025-06-17T16:33:38.849473"
+}
