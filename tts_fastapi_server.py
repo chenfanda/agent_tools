@@ -1,4 +1,5 @@
 import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128,expandable_segments:True"
 import shutil
 import tempfile
 import threading
@@ -18,7 +19,6 @@ from tts_utils import (
     initialize_model,
     model_instance,
     model_last_used,
-    # model_lock,
     model_config,
     IDLE_TIME_MINUTES,
     USER_CUSTOM_VOICES_CONFIG,
@@ -34,7 +34,6 @@ from tts_utils import (
     TimelineDialogueRequest,
     TimelineDialogueResponse,
     generate_timeline_dialogue_logic,
-    # generate_speech_logic,
     generate_speech_with_prompt_logic,
     generate_speech_with_custom_voice_logic,
     save_custom_voice_logic,
@@ -42,7 +41,9 @@ from tts_utils import (
     delete_user_custom_voice_logic,
     get_custom_voices_statistics,
     preprocess_audio,
-    validate_username_format
+    validate_username_format,
+    SmartDubbingRequest, 
+    process_smart_dubbing
 )
 
 setup_logging()
@@ -266,6 +267,7 @@ async def generate_speech_with_prompt(
     gender: str = Form(None),
     pitch: str = Form(None),
     speed: str = Form(None),
+    target_duration: float = Form(None),
     prompt_audio: UploadFile = File(None)
 ):
     """生成语音（支持上传音频作为prompt）"""
@@ -275,12 +277,19 @@ async def generate_speech_with_prompt(
     try:
         if prompt_audio:
             temp_dir = tempfile.mkdtemp()
-            prompt_audio_path = os.path.join(temp_dir, prompt_audio.filename)
+            raw_audio_path = os.path.join(temp_dir, prompt_audio.filename)
             
-            with open(prompt_audio_path, "wb") as buffer:
+            with open(raw_audio_path, "wb") as buffer:
                 shutil.copyfileobj(prompt_audio.file, buffer)
             
-            logger.info(f"Prompt audio saved to: {prompt_audio_path}")
+            logger.info(f"Prompt audio saved to: {raw_audio_path}")
+            try:
+                prompt_audio_path = preprocess_audio(raw_audio_path)
+                logger.info(f"Preprocessed prompt audio: {prompt_audio_path}")
+            except Exception as e:
+                logger.error(f"Audio preprocessing failed: {e}")
+                # 如果预处理失败，回退到原始文件（虽然可能会崩，但好过直接报错）
+                prompt_audio_path = raw_audio_path
         
         return generate_speech_with_prompt_logic(
             text=text,
@@ -288,7 +297,8 @@ async def generate_speech_with_prompt(
             gender=gender,
             pitch=pitch,
             speed=speed,
-            prompt_audio_path=prompt_audio_path
+            prompt_audio_path=prompt_audio_path,
+            target_duration=target_duration
         )
         
     except ValueError as e:
@@ -398,6 +408,26 @@ async def generate_timeline_dialogue(request: TimelineDialogueRequest):
     except Exception as e:
         logger.error(f"时间轴对话生成失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"生成失败: {str(e)}")
+ 
+ 
+ 
+@app.post("/smart_dubbing/run")
+async def run_smart_dubbing_endpoint(request: SmartDubbingRequest):
+    """
+    智能全流程配音接口：聚合 -> 选优Prompt -> 生成 -> 对齐 -> 拼接
+    """
+    try:
+        
+        output_path = process_smart_dubbing(request)
+        
+        return {
+            "status": "success",
+            "audio_path": output_path,
+            "audio_id": os.path.basename(output_path).replace(".wav", "") 
+        }
+    except Exception as e:
+        logger.error(f"Smart dubbing failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn

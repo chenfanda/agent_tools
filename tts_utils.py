@@ -15,13 +15,44 @@ import asyncio
 import threading
 import time
 import re
+import gc
 
 from pydantic import BaseModel, validator
 from cli.SparkTTS import SparkTTS
 
 import librosa
+import soundfile as sf
 import numpy as np
 
+
+class TaskFileTracker:
+    """
+    任务级临时文件追踪器。
+    用于记录当前任务产生的所有临时文件路径，并在任务结束时统一清理。
+    """
+    def __init__(self):
+        self.files = []
+
+    def register(self, file_path):
+        """注册一个需要清理的文件路径"""
+        if file_path and file_path not in self.files:
+            self.files.append(file_path)
+        return file_path
+
+    def cleanup(self):
+        """清理所有注册的文件"""
+        logger = logging.getLogger(__name__)
+        cleaned_count = 0
+        for path in self.files:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+                    cleaned_count += 1
+            except Exception as e:
+                logger.warning(f"清理临时文件失败 {path}: {e}")
+        
+        if cleaned_count > 0:
+            logger.info(f"本次任务清理了 {cleaned_count} 个临时文件")
 # 日志配置 (保持原有配置)
 LOG_CONFIG = {
     "version": 1,
@@ -174,8 +205,34 @@ class TTSResponse(BaseModel):
     audio_path: str
     timestamp: str
     character_used: Optional[str] = None
+    
 
-# 新增用户自定义录音相关模型
+class SmartSubItem(BaseModel):
+    """前端传来的原始字幕项 (毫秒)"""
+    id: str
+    start_time: float 
+    end_time: float   
+    text: str         
+    new_text: str     
+    speaker: str      
+
+class MergedUnit(BaseModel):
+    """合并后的生成单元"""
+    speaker: str
+    text_merged: str       
+    prompt_text: str      
+    start_time_ms: float   
+    end_time_ms: float     
+    best_prompt_start: float 
+    best_prompt_end: float
+
+class SmartDubbingRequest(BaseModel):
+    """智能配音请求"""
+    subtitles: List[SmartSubItem]
+    original_audio_path: str 
+    output_filename: Optional[str] = None
+    merge_threshold_ms: float = 500.0 
+
 class SaveCustomVoiceRequest(BaseModel):
     """保存用户自定义录音请求"""
     username: str
@@ -309,7 +366,7 @@ def load_voice_characters() -> Dict[str, VoiceCharacter]:
     
     logger.info(f"总共加载了 {len(characters)} 个语音角色")
     return characters
-
+	
 def initialize_model():
     """初始化TTS模型"""
     global model_instance, model_needs_reload  # 添加 model_needs_reload
@@ -368,6 +425,10 @@ def preprocess_audio(audio_path: str, target_sr: int = 16000) -> str:
     try:
         # 加载音频，自动转换为单声道和目标采样率
         audio, sr = librosa.load(audio_path, sr=target_sr, mono=True)
+        
+        original_len = len(audio)
+        audio, _ = librosa.effects.trim(audio, top_db=30)
+        logger.info(f"去除静音: 采样点 {original_len} -> {len(audio)}")
 
         # 检查音频长度
         duration = len(audio) / sr
@@ -693,16 +754,32 @@ def generate_speech_with_character_logic(request: TTSWithCharacterRequest):
     logger.info(f"使用角色 {character.name} 生成语音: {request.text[:50]}...")
     
     # 执行推理
-    with torch.no_grad():
-        wav = model.inference(
-            request.text,
-            prompt_speech_path=character.audio_file,
-            prompt_text=character.prompt_text,
-            gender=request.gender or character.gender,
-            pitch=request.pitch,
-            speed=request.speed,
-        )
-        sf.write(save_path, wav, samplerate=16000)
+    try:
+        with torch.no_grad():
+            wav = model.inference(
+                request.text,
+                prompt_speech_path=character.audio_file,
+                prompt_text=character.prompt_text,
+                gender=request.gender or character.gender,
+                pitch=request.pitch,
+                speed=request.speed,
+            )
+            sf.write(save_path, wav, samplerate=16000)
+
+            del wav
+
+    except Exception as e:
+        logger.error(f"Inference error: {e}")
+        raise e
+
+    finally:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+        elif torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+
+        gc.collect()
     
     # 更新使用时间
     update_model_usage()
@@ -717,7 +794,6 @@ def generate_speech_with_character_logic(request: TTSWithCharacterRequest):
         character_used=character.name
     )
 
-
     
 def generate_speech_with_prompt_logic(
     text: str,
@@ -725,7 +801,8 @@ def generate_speech_with_prompt_logic(
     gender: Optional[str] = None,
     pitch: Optional[str] = None,
     speed: Optional[str] = None,
-    prompt_audio_path: Optional[str] = None
+    prompt_audio_path: Optional[str] = None,
+    target_duration: Optional[float] = None 
 ):
     """生成语音的核心逻辑（支持音频prompt）"""
     logger = logging.getLogger(__name__)
@@ -749,7 +826,21 @@ def generate_speech_with_prompt_logic(
             pitch=pitch,
             speed=speed,
         )
-        sf.write(save_path, wav, samplerate=16000)
+        
+    if target_duration and target_duration > 0:
+        if isinstance(wav, torch.Tensor):
+            wav = wav.cpu().numpy()
+   
+        
+    max_val = np.max(np.abs(wav))
+   
+    if max_val > 0:
+        wav = wav / max_val * 0.95
+        logger.info(f"音频归一化完成: 原始峰值 {max_val:.4f} -> 放大至 0.95")
+    
+    if target_duration and target_duration > 0:
+        wav = adjust_audio_duration(wav, target_duration, sr=16000)
+    sf.write(save_path, wav, samplerate=16000)
     
     # 更新使用时间
     update_model_usage()
@@ -803,7 +894,7 @@ def generate_timeline_dialogue_logic(request: TimelineDialogueRequest):
                 text=line.text,
                 username=username,
                 voice_id=voice_id,
-                speed="slow" if line.speed < 1.0 else ("high" if line.speed > 1.0 else "moderate")
+                speed="low" if line.speed < 1.0 else ("high" if line.speed > 1.0 else "moderate")
             )
         else:
             # 角色库格式
@@ -814,7 +905,7 @@ def generate_timeline_dialogue_logic(request: TimelineDialogueRequest):
                 TTSWithCharacterRequest(
                     text=line.text,
                     character_id=line.voice_id,
-                    speed="slow" if line.speed < 1.0 else ("high" if line.speed > 1.0 else "moderate")
+                    speed="low" if line.speed < 1.0 else ("high" if line.speed > 1.0 else "moderate")
                 )
             )
         
@@ -835,3 +926,289 @@ def generate_timeline_dialogue_logic(request: TimelineDialogueRequest):
         audio_files=audio_files,
         timestamp=datetime.now().isoformat()
     )
+    
+ 
+def adjust_audio_duration(wav_data: np.ndarray, target_duration: float, sr: int = 16000) -> np.ndarray:
+    """
+    【高保真对齐】绝不使用 time_stretch 变速，只做裁剪(Trim)和填充(Pad)。
+    确保 100% 保留模型生成的原始音质。
+    """
+    logger = logging.getLogger(__name__)
+    if target_duration is None or target_duration <= 0.1:
+        return wav_data
+
+    current_samples = len(wav_data)
+    target_samples = int(target_duration * sr)
+    
+    # 1. 生成过长：切除静音 -> 还是长则截断 (保音质优先)
+    if current_samples > target_samples:
+        wav_trimmed, _ = librosa.effects.trim(wav_data, top_db=30)
+        trimmed_len = len(wav_trimmed)
+        
+        if trimmed_len <= target_samples:
+            # 切除静音后能塞进去，补齐剩余部分
+            pad_width = target_samples - trimmed_len
+            return np.pad(wav_trimmed, (0, pad_width), mode='constant')
+        else:
+            # 严重过长，执行硬截断并淡出
+            # logger.warning(f"音频过长 ({current_samples/sr:.2f}s > {target_duration:.2f}s)，执行截断。")
+            wav_trimmed = wav_trimmed[:target_samples]
+            fade_len = int(0.05 * sr)
+            if len(wav_trimmed) > fade_len:
+                wav_trimmed[-fade_len:] *= np.linspace(1, 0, fade_len)
+            return wav_trimmed
+
+    # 2. 生成过短：补静音 (完美音质)
+    elif current_samples < target_samples:
+        pad_width = target_samples - current_samples
+        return np.pad(wav_data, (0, pad_width), mode='constant')
+
+    return wav_data
+
+def _get_prompt_candidates(subtitles: List[SmartSubItem]) -> List[Dict]:
+    """
+    清洗并筛选最佳参考片段
+    """
+    candidates = []
+    for item in subtitles:
+        duration_sec = (item.end_time - item.start_time) / 1000.0
+        text_len = len(item.text.strip())
+        
+        if duration_sec <= 0.5: continue 
+        
+        cps = text_len / duration_sec
+        score = 0
+        
+        # 评分逻辑
+        if cps < 1.0: score -= 50    # 可能是背景音
+        elif cps > 9.0: score -= 50  # 可能是ASR错误
+        else: score += 10
+        
+        if 3.0 <= duration_sec <= 8.0: score += 20
+        elif 2.0 <= duration_sec < 3.0: score += 10
+        elif duration_sec > 10.0: score -= 10
+            
+        candidates.append({
+            "start": item.start_time,
+            "end": item.end_time,
+            "text": item.text, # 绑定原始文本
+            "score": score,
+            "duration": duration_sec
+        })
+    
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    return candidates
+
+def _merge_smart_subtitles(subtitles: List[SmartSubItem], threshold_ms: float) -> List[Dict]:
+    """
+    智能聚合字幕，返回原始列表供后续筛选
+    """
+    if not subtitles: return []
+    sorted_subs = sorted(subtitles, key=lambda x: x.start_time)
+    units = []
+    current_group = [sorted_subs[0]]
+    
+    def pack_group(group):
+        return {
+            "speaker": group[0].speaker,
+            "text_merged": "，".join([s.new_text for s in group]),
+            "start_ms": group[0].start_time,
+            "end_ms": group[-1].end_time,
+            "sub_list": group # 保留原始列表
+        }
+    
+    for i in range(1, len(sorted_subs)):
+        prev = current_group[-1]
+        curr = sorted_subs[i]
+        gap = curr.start_time - prev.end_time
+        if curr.speaker == prev.speaker and gap <= threshold_ms:
+            current_group.append(curr)
+        else:
+            units.append(pack_group(current_group))
+            current_group = [curr]
+            
+    if current_group:
+        units.append(pack_group(current_group))
+    return units
+
+def _run_inference(model, text, prompt_path, prompt_text, speed):
+    """封装推理调用"""
+    with torch.no_grad():
+        wav = model.inference(
+            text=text,
+            prompt_speech_path=prompt_path,
+            prompt_text=prompt_text,
+            speed=speed
+        )
+    if hasattr(wav, 'cpu'):
+        wav = wav.cpu().numpy()
+    return wav
+
+
+
+def generate_aligned_speech(model, merged_unit: MergedUnit, candidate: Dict, full_audio: np.ndarray, sr: int): 
+    """ 
+    自适应语速生成函数 (生产环境版)
+    1. 计算语速并生成音频
+    2. 自动去除生成结果的静音
+    3. 如果净时长严重超时，自动调整语速重试
+    4. 最后进行物理对齐
+    """ 
+    logger = logging.getLogger(__name__) 
+
+    # --- 1. 基础计算 --- 
+    target_dur = (merged_unit.end_time_ms - merged_unit.start_time_ms) / 1000.0
+    target_text_len = len(merged_unit.text_merged) 
+    
+    prompt_dur = candidate["duration"] 
+    prompt_text_len = len(candidate["text"]) 
+    
+    # 动态计算 Prompt 语速 (防止除0或短文本偏差)
+    if prompt_dur < 0.5 or prompt_text_len < 2: 
+        prompt_cps = 3.5
+    else: 
+        prompt_cps = prompt_text_len / prompt_dur
+
+    req_cps = target_text_len / target_dur
+    
+    # 计算倍率
+    base_speed = req_cps / prompt_cps
+    init_speed = max(0.8, min(base_speed, 1.5)) 
+
+    # --- 2. 截取 Prompt 音频 --- 
+    p_start = int((candidate["start"] / 1000.0) * sr) 
+    p_end = int((candidate["end"] / 1000.0) * sr) 
+    
+    # 边界检查
+    p_end = min(p_end, len(full_audio)) 
+    prompt_wav = full_audio[p_start:p_end] 
+    
+    # 去除 Prompt 静音 (这对提取音色很重要)
+    prompt_wav_trimmed, _ = librosa.effects.trim(prompt_wav, top_db=25) 
+    
+    # 创建临时文件供推理使用
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_prompt: 
+        sf.write(tmp_prompt.name, prompt_wav_trimmed, sr) 
+        tmp_prompt_path = tmp_prompt.name
+
+    try: 
+        # --- 3. 第一轮生成 ---
+        wav_1_raw = _run_inference(model, merged_unit.text_merged, tmp_prompt_path, candidate["text"], init_speed) 
+        
+        # 立即清洗生成结果的静音
+        wav_1, _ = librosa.effects.trim(wav_1_raw, top_db=30) 
+        dur_1 = len(wav_1) / sr
+        
+        final_wav = wav_1
+        
+        # --- 4. 误差校验与重试 ---
+        # 只有净时长依然超时 (>15%) 才重试
+        if dur_1 > target_dur * 1.15: 
+            correction = dur_1 / target_dur
+            new_speed = min(init_speed * correction * 1.05, 1.6) 
+            
+            # logger.info(f"时长修正重试: Speed {init_speed:.2f} -> {new_speed:.2f}") 
+            
+            wav_2_raw = _run_inference(model, merged_unit.text_merged, tmp_prompt_path, candidate["text"], new_speed) 
+            wav_2, _ = librosa.effects.trim(wav_2_raw, top_db=30) 
+            final_wav = wav_2
+
+        # --- 5. 物理对齐 (Padding/Trimming) ---
+        return adjust_audio_duration(final_wav, target_dur, sr) 
+
+    finally: 
+        if os.path.exists(tmp_prompt_path): 
+            os.unlink(tmp_prompt_path) 
+
+def process_smart_dubbing(request: SmartDubbingRequest): 
+    logger = logging.getLogger(__name__) 
+    
+    # --- 1. 检查输入文件 --- 
+    if not os.path.exists(request.original_audio_path): 
+        raise FileNotFoundError(f"原声文件不存在: {request.original_audio_path}") 
+        
+    model = initialize_model() 
+    
+    # --- 2. 加载音频并获取时长 --- 
+    full_audio, sr = librosa.load(request.original_audio_path, sr=16000, mono=True) 
+    audio_duration_sec = librosa.get_duration(y=full_audio, sr=sr) 
+    
+    # --- 3. 计算总时长 (防止截断) --- 
+    last_subtitle_end_ms = 0
+    if request.subtitles: 
+        last_subtitle_end_ms = max(s.end_time for s in request.subtitles) 
+    
+    last_subtitle_end_sec = last_subtitle_end_ms / 1000.0
+    final_duration_sec = max(audio_duration_sec, last_subtitle_end_sec) 
+    
+    # 初始化画布
+    final_track = np.zeros(int(final_duration_sec * sr) + 16000) 
+    
+    # --- 4. 聚合字幕 ---
+    merged_units_data = _merge_smart_subtitles(request.subtitles, request.merge_threshold_ms) 
+    logger.info(f"智能聚合完成: {len(request.subtitles)} -> {len(merged_units_data)} 段") 
+    
+    # --- 5. 循环处理 ---
+    for i, unit_data in enumerate(merged_units_data): 
+        # 筛选参考音频
+        candidates = _get_prompt_candidates(unit_data['sub_list']) 
+        if not candidates: 
+            # logger.warning(f"片段 {i} 无有效参考音频，跳过") 
+            continue
+        
+        # 构造对象
+        temp_unit = MergedUnit( 
+            speaker=unit_data['speaker'], 
+            text_merged=unit_data['text_merged'], 
+            prompt_text="", 
+            start_time_ms=unit_data['start_ms'], 
+            end_time_ms=unit_data['end_ms'], 
+            best_prompt_start=0, best_prompt_end=0
+        ) 
+        
+        # 生成音频
+        aligned_wav = generate_aligned_speech( 
+            model=model, 
+            merged_unit=temp_unit, 
+            candidate=candidates[0], 
+            full_audio=full_audio, 
+            sr=sr
+        ) 
+        
+        # 计算拼接位置 (绝对定位)
+        start_idx = int((unit_data['start_ms'] / 1000.0) * sr) 
+        end_idx = start_idx + len(aligned_wav) 
+        
+        # 动态扩容 (双重保险) 
+        if end_idx > len(final_track): 
+            new_track = np.zeros(end_idx + 16000) 
+            new_track[:len(final_track)] = final_track
+            final_track = new_track
+            
+        # 淡入淡出处理
+        fade_len = int(0.05 * sr) 
+        if len(aligned_wav) > fade_len * 2: 
+            aligned_wav[:fade_len] *= np.linspace(0, 1, fade_len) 
+            aligned_wav[-fade_len:] *= np.linspace(1, 0, fade_len) 
+            
+        # 叠加到总轨道
+        final_track[start_idx:end_idx] += aligned_wav
+
+    # --- 6. 导出 --- 
+    output_filename = request.output_filename or f"smart_dub_{uuid.uuid4().hex[:8]}.wav" 
+    save_path = os.path.join(model_config['save_dir'], output_filename) 
+    
+    # 归一化防止爆音
+    max_val = np.max(np.abs(final_track)) 
+    if max_val > 0.95: 
+        final_track = final_track / max_val * 0.95
+        
+    sf.write(save_path, final_track, sr) 
+    logger.info(f"配音生成完成: {save_path}") 
+    return save_path
+
+
+
+
+
+
